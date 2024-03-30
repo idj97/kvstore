@@ -32,7 +32,6 @@ typedef struct {
     BTPageHeader* hdr;
     CellPointer* cell_ptrs;
     char* pdata;
-    int (*cmp)(char*, uint16_t, char*, uint16_t);
 } BTPage;
 
 
@@ -41,14 +40,31 @@ BTPage* buffer[1000];
 uint32_t page_counter;
 
 
-BTPage* alloc(int (*cmp)(char*, uint16_t, char*, uint16_t)) {
+int binary_collation(
+    char* key1,
+    uint16_t key1_size,
+    char* key2,
+    uint16_t key2_size
+) {
+    // thx sqlite
+    int rc, n;
+    n = key1_size < key2_size ? key1_size : key2_size;
+    assert(key1 && key2);
+    rc = memcmp(key1, key2, n);
+    if (rc == 0) {
+        rc = key1_size - key2_size;
+    }
+    return rc;
+}
+
+
+BTPage* alloc() {
     char* pdata = calloc(1, PAGE_SIZE);
     BTPage* page = calloc(1, sizeof(BTPage));
     page->hdr = (BTPageHeader*)pdata;
     page->hdr->free_space_end = PAGE_SIZE;
     page->cell_ptrs = (CellPointer*)(pdata + PAGE_HDR_SIZE);
     page->pdata = pdata;
-    page->cmp = cmp;
     return page;
 }
 
@@ -84,7 +100,7 @@ uint16_t _find_insertion_point(
         cell = _get_cell_ptr(page, mid);
         cell_key = &page->pdata[cell->offset];
 
-        int cmp_res = page->cmp(key, key_size, cell_key, cell->key_size);
+        int cmp_res = binary_collation(key, key_size, cell_key, cell->key_size);
 
         if (cmp_res > 0) {
             lo = mid + 1;
@@ -111,7 +127,7 @@ int _find_cell_bs(BTPage* page, char* key, uint16_t key_size, uint16_t* res) {
         mid_cell = _get_cell_ptr(page, mid);
         mid_cell_key = &page->pdata[mid_cell->offset];
 
-        int rcmp = page->cmp(key, key_size, mid_cell_key, mid_cell->key_size);
+        int rcmp = binary_collation(key, key_size, mid_cell_key, mid_cell->key_size);
         if (rcmp == 0) {
             *res = mid;
             return 0;
@@ -167,7 +183,7 @@ int set(
         CellPointer* cell = _get_cell_ptr(page, insertion_point);
         char* cell_key = &page->pdata[cell->offset];
 
-        if (page->cmp(key, key_size, cell_key, cell->key_size) == 0) {
+        if (binary_collation(key, key_size, cell_key, cell->key_size) == 0) {
             printf("key already exists, todo: overwrite?\n");
             return 1;
         }
@@ -204,19 +220,6 @@ int get(BTPage* page, char* key, uint16_t key_size, char** data, uint16_t* data_
         return 0;
     }
     return 1;
-}
-
-
-int cmp(char* a, uint16_t a_size, char* b, uint16_t b_size) {
-    uint32_t ia = *(uint32_t*)a;
-    uint32_t ib = *(uint32_t*)b;
-    if (ia > ib) {
-        return 1;
-    } else if (ia < ib) {
-        return -1;
-    } else {
-        return 0;
-    }
 }
 
 // Crumbs
@@ -301,7 +304,7 @@ void btree_insert(BTree* btree, char* key, uint16_t key_size, char* data, uint16
 
 int main() {
     FILE* f = fopen("btree_leaf.data", "w");
-    BTPage* page = alloc(&cmp);
+    BTPage* page = alloc();
 
     uint32_t key1 = 123;
     char* data1 = "bbbb";
