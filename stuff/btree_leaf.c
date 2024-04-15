@@ -5,7 +5,7 @@
 #include <assert.h>
 
 
-#define PAGE_SIZE 100
+#define PAGE_SIZE 256
 #define PAGE_HDR_SIZE 16
 #define PAGE_CELL_PTR_SIZE 8
 
@@ -28,20 +28,38 @@ typedef struct CellPointer {
 } CellPointer;
 
 
+
+typedef struct BTree {
+    uint32_t root_page_id;
+    int (*cmp)(const void*, size_t, const void*, size_t);
+} BTree;
+
 typedef struct BTPage {
     BTPageHeader* hdr;
     CellPointer* cell_ptrs;
     char* pdata;
+    BTree* btree;
 } BTPage;
 
 
 uint32_t page_counter = 0;
 BTPage* buffer[1000];
 
+
+int compare_integers(
+    const void* a,
+    size_t a_sz,
+    const void* b,
+    size_t b_sz
+) {
+    return *(int*)a - *(int*)b;
+}
+
+
 int binary_collation(
-    char* key1,
+    const void* key1,
     uint16_t key1_size,
-    char* key2,
+    const void* key2,
     uint16_t key2_size
 ) {
     // thx sqlite
@@ -56,10 +74,11 @@ int binary_collation(
 }
 
 
-BTPage* alloc() {
+BTPage* alloc(BTree* bt) {
     char* pdata = calloc(1, PAGE_SIZE);
     BTPage* page = calloc(1, sizeof(BTPage));
     page->hdr = (BTPageHeader*)pdata;
+    page->btree = bt;
 
     printf("=======\n");
     printf("page_counter before: %d\n", page_counter);
@@ -132,7 +151,7 @@ uint16_t _bisect_left(
         cell = _get_cell_ptr(page, mid);
         cell_key = &page->pdata[cell->offset];
 
-        int cmp_res = binary_collation(key, key_size, cell_key, cell->key_size);
+        int cmp_res = page->btree->cmp(key, key_size, cell_key, cell->key_size);
 
         if (cmp_res > 0) {
             lo = mid + 1;
@@ -159,7 +178,7 @@ int _find_cell_bs(BTPage* page, char* key, uint16_t key_size, uint16_t* res) {
         mid_cell = _get_cell_ptr(page, mid);
         mid_cell_key = &page->pdata[mid_cell->offset];
 
-        int rcmp = binary_collation(key, key_size, mid_cell_key, mid_cell->key_size);
+        int rcmp = page->btree->cmp(key, key_size, mid_cell_key, mid_cell->key_size);
         if (rcmp == 0) {
             *res = mid;
             return 0;
@@ -221,6 +240,18 @@ typedef enum {
 } BTPageSetStatus;
 
 
+int internal_instert(
+    BTPage* page,      // internal node
+    char* key,         // promoted key
+    uint16_t key_size, // key size in bytes
+    uint32_t page_id   // id of new page
+) {
+
+
+
+    return Ok;
+}
+
 int set(
     BTPage* page,
     char* key,
@@ -232,6 +263,7 @@ int set(
     int overwrite = 0;
     uint16_t data_offset;
     uint16_t key_offset;
+    int is_append = 0;
 
     CellPointer* cp = _find_cell_ptr(page, key, key_size);
     if (cp != NULL) {
@@ -280,6 +312,8 @@ int set(
             if (insertion_point < page->hdr->cell_count) {
                 printf("moving cells\n");
                 _move_cells(page, insertion_point);
+            } else {
+                is_append = 1;
             }
 
             data_offset = page->hdr->free_space_end - data_size;
@@ -287,10 +321,20 @@ int set(
         }
     }
 
-    // insert data
-    printf("writting key and data...\n");
-    memcpy(page->pdata + data_offset, data, data_size);
-    memcpy(page->pdata + key_offset, key, key_size);
+    if (page->hdr->is_leaf != 0 || is_append == 1) {
+        printf("writting key and data...\n");
+        memcpy(page->pdata + data_offset, data, data_size);
+        memcpy(page->pdata + key_offset, key, key_size);
+    } else {
+        // we insert the key at insertion point
+        // but the data is inserted in next cell
+        CellPointer* next_cp = cp + 1;
+        memcpy(page->pdata + next_cp->offset, page->pdata + cp->offset, cp->key_size);
+        memcpy(page->pdata + next_cp->offset + next_cp->key_size, data, data_size);
+        memcpy(page->pdata + cp->offset, key, key_size);
+    }
+
+    // TODO: refactor set method into leaf_insert, internal_insert
 
     printf("updating cell meta\n");
     // Insert cell
@@ -302,9 +346,10 @@ int set(
     // if current page is internal page
     // then check if inserted page id is bigger then rightmost page id stored in header
     // if yes then swap
-    if (page->hdr->is_leaf != 1) {
-        uint32_t* pid = (uint32_t*)(page->pdata + data_offset);
-        if (*pid > page->hdr->rightmost_pid) {
+    if (page->hdr->is_leaf == 0) {
+        uint32_t* pid = (uint32_t*)(page->pdata + key_offset);
+        const void* last_key = (uint32_t*)(page->pdata + key_offset);
+        if (page->btree->cmp(key, key_size, last_key, key_size) > 0) {
             uint32_t temp = *pid;
             *pid = page->hdr->rightmost_pid;
             page->hdr->rightmost_pid = temp;
@@ -328,7 +373,7 @@ int split_page(BTPage* page, BTPage** right_ptr) {
     // }
 
     BTPage* left = blank_page();
-    BTPage* right = alloc();
+    BTPage* right = alloc(page->btree);
     left->hdr->is_leaf = page->hdr->is_leaf;
     left->hdr->pid = page->hdr->pid;
     right->hdr->is_leaf = page->hdr->is_leaf;
@@ -458,20 +503,16 @@ void btcrumbs_destroy(BTCrumbs* crumbs) {
 // BTREE top
 //////////////////////////////////////////////////
 
-typedef struct BTree {
-    uint32_t root_page_id;
-} BTree;
-
-
-BTree* btree_new() {
-    BTPage* root_page = alloc();
+BTree* btree_new(int (*cmp)(const void*, size_t, const void*, size_t)) {
+    BTree* btree = malloc(sizeof(BTree));
+    BTPage* root_page = alloc(btree);
     root_page->hdr->is_leaf = 1;
 
     uint32_t root_page_id = root_page->hdr->pid;
     buffer[root_page_id] = root_page;
 
-    BTree* btree = malloc(sizeof(BTree));
     btree->root_page_id = root_page_id;
+    btree->cmp = cmp;
     return btree;
 }
 
@@ -513,15 +554,18 @@ int btree_promote(
     uint16_t key_size
 ) {
 
+    uint32_t leaf_pid = leaf->hdr->pid;
     if (crumbs->n == 0) {
-        BTPage* new_root = alloc();
+        printf("LEAF PID:%d\n", leaf_pid);
+        BTPage* new_root = alloc(btree);
         new_root->hdr->is_leaf = 0;
-        set(new_root, key, key_size, (char*)&leaf->hdr->pid, 4);
         new_root->hdr->rightmost_pid = sibbling->hdr->pid;
+        set(new_root, key, key_size, (char*)&leaf_pid, 4);
         btree->root_page_id = new_root->hdr->pid;
         return Ok;
     } else {
         BTPage* parent = btcrumbs_pop(crumbs);
+        uint32_t parent_pid = parent->hdr->pid;
         uint32_t right_pid = sibbling->hdr->pid;
         char* right_pid_data = (char*)&right_pid;
         uint16_t right_pid_data_size = 4;
@@ -543,7 +587,7 @@ int btree_promote(
             // insert new item into appropriate page
             // if key is >= leftmost_key from right page then insert into right page
             // else insert into left page
-            int cmp_res = binary_collation(key, key_size, split_key, split_key_size);
+            int cmp_res = btree->cmp(key, key_size, split_key, split_key_size);
             if (cmp_res >= 0) {
                 set(parent_sibbling, key, key_size, right_pid_data, right_pid_data_size);
                 if (cmp_res == 0) {
@@ -602,7 +646,7 @@ int btree_insert(BTree* btree, char* key, uint16_t key_size, char* data, uint16_
         // insert new item into appropriate page
         // if key is >= leftmost_key from right page then insert into right page
         // else insert into left page
-        int cmp_res = binary_collation(key, key_size, split_key, split_key_size);
+        int cmp_res = btree->cmp(key, key_size, split_key, split_key_size);
         if (cmp_res >= 0) {
             set(sibbling, key, key_size, data, data_size);
             if (cmp_res == 0) {
@@ -636,7 +680,7 @@ void flush_page(void* data) {
 
 int main() {
     page_counter = 0;
-    BTree* btree = btree_new();
+    BTree* btree = btree_new(compare_integers);
 
     uint32_t key1 = 123;
     char* data1 = "bbbb";
@@ -647,10 +691,21 @@ int main() {
     uint32_t key4 = 0;
     char* data4 = "kkkkkk";
 
-    for (uint32_t i = 1; i <= 3; i++) {
-        btree_insert(btree, (char*)&i, 4, data3, strlen(data3) + 1);
+    char nLine[256];
+    int n = 28;
+    // printf("enter n:");
+    // if (fgets(nLine, sizeof(nLine), stdin)) {
+        // if (1 == sscanf(nLine, "%d", &n)) {
+    for (uint32_t i = 1; i <= n; i++) {
+        uint32_t x = rand() % 10000;
+        printf("inserting %d, cell count: %d\n", x, buffer[btree->root_page_id]->hdr->cell_count);
+        char* key = (char*)&x;
+        uint16_t data_size = strlen(data3) + 1;
+        btree_insert(btree, key, 4, data3, data_size);
         flush_page(buffer[btree->root_page_id]);
     }
+    // }
+// }
 
     printf("\n\n\n\n\n\n\n\n");
 
@@ -668,6 +723,8 @@ int main() {
                 print_page(buffer[i]);
                 printf("========\n");
             }
+        } else {
+            return 0;
         }
     }
 }

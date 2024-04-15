@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <assert.h>
+#include <inttypes.h>
 
 static int binCollFunc(
     int nKey1, const void* pKey1,
@@ -21,8 +22,14 @@ static int binCollFunc(
 
 
 int main() {
-    char* a = "aaa";
-    char* b = "aaaBasd";
-    printf("('%s' == '%s') = %d\n", a, b, binCollFunc(strlen(a), a, strlen(b), b));
+    uint32_t aa = 2777;
+    uint32_t bb = 9383;
+
+    char* a = &a;
+    char* b = &b;
+    int rc = binCollFunc(4, a, 4, b);
+    printf("%d\n", rc);
+
+    // printf("('%s' == '%s') = %d\n", a, b, binCollFunc(strlen(a), a, strlen(b), b));
     return 0;
 }
