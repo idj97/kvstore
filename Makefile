@@ -1,16 +1,11 @@
 init_bin_dir:
 	@if [ ! -d "./bin" ]; then @mkdir bin; fi
 
-run_binsearch:
-	@gcc src/binary_search.c 
-	./a.out
+build:
+	gcc src/btree.c
 
-run_collation:
-	@gcc src/collation.c
-	./a.out
-
-run_btree:
-	@gcc src/btree_leaf.c
+run:
+	@gcc src/btree.c
 	./a.out
 
 test_build: init_bin_dir
@@ -18,13 +13,13 @@ test_build: init_bin_dir
 		-g \
 		-Wextra \
 		-fsanitize=address \
-		-o ./bin/test.out \
-		src/test.c \
-		slotted_page.c \
+		-DTEST \
+		-o ./bin/test_btree \
+		src/test_btree.c \
 		lib/unity/unity.c
 
-test: test_build	
-	./bin/test.out
+test: test_build
+	./bin/test_btree
 
 test_memcheck: test_build
-	valgrind --track-origins=yes --leak-check=full ./bin/test.out
+	valgrind --track-origins=yes --leak-check=full ./bin/test_btree
