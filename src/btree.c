@@ -27,8 +27,9 @@ typedef struct BTPageHdr {
     u32 rightmost_pid;       // 4
     u16 cell_count;          // 2
     u16 freespace_end;       // 2
+    u16 freespace;           // 2
     u8  is_leaf;             // 1
-    int : 24;                // 3
+    int : 8;                 // 1
 } BTPageHdr;
 
 typedef struct BTCellPtr {
@@ -76,6 +77,7 @@ BTPage* page_new(BTree* btree) {
     page->btree = btree;
     page->hdr->pid = page_counter++;
     page->hdr->freespace_end = PAGE_SIZE;
+    page->hdr->freespace = PAGE_SIZE - PAGE_HDR_SIZE;
     page->cell_ptrs = (BTCellPtr*)(pdata + PAGE_HDR_SIZE);
     page->pdata = pdata;
     buffer[page->hdr->pid] = page;
@@ -87,6 +89,7 @@ BTPage* page_blank() {
     BTPage* page = calloc(1, sizeof(BTPage));
     page->hdr = (BTPageHdr*)pdata;
     page->hdr->freespace_end = PAGE_SIZE;
+    page->hdr->freespace = PAGE_SIZE - PAGE_HDR_SIZE;
     page->cell_ptrs = (BTCellPtr*)(pdata + PAGE_HDR_SIZE);
     page->pdata = pdata;
     return page;
@@ -95,10 +98,6 @@ BTPage* page_blank() {
 void page_destroy(BTPage* page) {
     free(page->pdata);
     free(page);
-}
-
-u16 page_freespace(BTPage* page) {
-    return page->hdr->freespace_end - (PAGE_HDR_SIZE + (PAGE_CELL_PTR_SIZE * page->hdr->cell_count));
 }
 
 BTCellPtr* page_cellptr_at(BTPage* page, u16 pos) {
@@ -209,10 +208,9 @@ int page_leaf_insert(
     if (cellptr == NULL) {
         // key to insert doesn't exist in current page
 
-        u16 freespace = page_freespace(page);
-        if (freespace < required_space) {
+        if (page->hdr->freespace < required_space) {
             printf("not enough free space, have: %d required: %d\n",
-                freespace, required_space
+                page->hdr->freespace, required_space
             );
             return NotEnoughSpace;
         } else {
@@ -234,6 +232,7 @@ int page_leaf_insert(
             // update page hdr
             page->hdr->cell_count++;
             page->hdr->freespace_end = key_offset;
+            page->hdr->freespace -= required_space;
         }
     } else {
         // overwrite
@@ -245,6 +244,10 @@ int page_leaf_insert(
             // just overwrite it 
             key_offset = cellptr->offset;
             data_offset = cellptr->offset + cellptr->key_size;
+
+            if (new_size < curr_size) {
+                page->hdr->freespace += (curr_size - new_size);
+            }
         } else {
             return NotEnoughSpace;
         }
@@ -303,6 +306,7 @@ BTPageSplitResult page_leaf_split(BTPage* page) {
         // update metadata of left page
         int payload_size = src_cellptr->key_size + src_cellptr->data_size;
         left->hdr->freespace_end -= payload_size;
+        left->hdr->freespace -= (payload_size + PAGE_CELL_PTR_SIZE);
         left->hdr->cell_count++;
 
         // update destination cell pointer metadata
@@ -329,6 +333,7 @@ BTPageSplitResult page_leaf_split(BTPage* page) {
         int payload_size = src_cellptr->key_size + src_cellptr->data_size;
         right->hdr->freespace_end -= payload_size;
         right->hdr->cell_count++;
+        right->hdr->freespace -= (payload_size + PAGE_CELL_PTR_SIZE);
 
         // update destination cell pointer metadata
         dest_cellptr->offset = right->hdr->freespace_end;

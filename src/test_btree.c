@@ -67,19 +67,20 @@ void test_page_leaf_insert() {
 
     int rc;
 
-    int key = 5; char* data = "1213";
+    int key = 5; char* data = "1213"; // 9
     rc = page_insert_intstr(page, &key, data);
     asrt(rc == Ok);
 
-    int key2 = 1; char* data2 = "456";
+    int key2 = 1; char* data2 = "456"; // 8
     rc = page_insert_intstr(page, &key2, data2);
     asrt(rc == Ok);
 
-    int key3 = 4; char* data3 = "789ab";
+    int key3 = 4; char* data3 = "789ab"; // 10
     rc = page_insert_intstr(page, &key3, data3);
     asrt(rc == Ok);
 
     TEST_ASSERT_EQUAL_INT(3, page->hdr->cell_count);
+    TEST_ASSERT_EQUAL_INT(49, page->hdr->freespace);
 
     // v1 + v2 + v3
     //  9 + 8 + 10 = 27 
@@ -125,6 +126,7 @@ void test_page_leaf_insert_when_full() {
         int rc = page_insert_intstr(page, &key, data);
         asrt(rc == Ok);
     }
+    TEST_ASSERT_EQUAL_INT(2, page->hdr->freespace);
 
     int key = 6;
     int rc = page_insert_intstr(page, &key, data);
@@ -157,6 +159,7 @@ void test_page_leaf_overwrite() {
         rc = page_insert_intstr(page, &key, data);
         asrt(rc == Ok);
     }
+    TEST_ASSERT_EQUAL_INT(7, page->hdr->freespace);
 
     int key = 2;
 
@@ -165,20 +168,24 @@ void test_page_leaf_overwrite() {
     asrt(rc == Ok);
     TEST_ASSERT_EQUAL_INT(2, page_get_intkey(page, 1));
     TEST_ASSERT_EQUAL_STRING(new_data1, page_get_chardata(page, 1));
+    TEST_ASSERT_EQUAL_INT(7, page->hdr->freespace);
 
     char* new_data2 = "22";
     rc = page_insert_intstr(page, &key, new_data2);
     asrt(rc == Ok);
     TEST_ASSERT_EQUAL_INT(2, page_get_intkey(page, 1));
     TEST_ASSERT_EQUAL_STRING(new_data2, page_get_chardata(page, 1));
+    TEST_ASSERT_EQUAL_INT(9, page->hdr->freespace);
 
     char* new_data3 = "333333333333333333333333333333333333333333";
     rc = page_insert_intstr(page, &key, new_data3);
     asrt(rc == PayloadTooBig);
+    TEST_ASSERT_EQUAL_INT(9, page->hdr->freespace);
 
     char* new_data4 = "12345";
     rc = page_insert_intstr(page, &key, new_data4);
     TEST_ASSERT_EQUAL_INT(NotEnoughSpace, rc);
+    TEST_ASSERT_EQUAL_INT(9, page->hdr->freespace);
 
     // double check that we everything is still fine...
     TEST_ASSERT_EQUAL_INT(1, page_get_intkey(page, 0));
@@ -210,7 +217,7 @@ void test_page_leaf_split() {
         asrt(rc == Ok);
     }
 
-    TEST_ASSERT_EQUAL_INT(2, page_freespace(page));
+    TEST_ASSERT_EQUAL_INT(2, page->hdr->freespace);
 
     BTPageSplitResult res = page_leaf_split(page);
     asrt(res.status == Ok);
@@ -229,6 +236,8 @@ void test_page_leaf_split() {
     TEST_ASSERT_EQUAL_INT(2, res.page->hdr->cell_count);
     TEST_ASSERT_EQUAL_INT(1, res.page->hdr->is_leaf);
     TEST_ASSERT_EQUAL_INT(128 - 2 * 10, res.page->hdr->freespace_end);
+    TEST_ASSERT_EQUAL_INT(68, res.page->hdr->freespace);
+
     // check elements in left page
     TEST_ASSERT_EQUAL_INT(1, page_get_intkey(res.page, 0));
     TEST_ASSERT_EQUAL_STRING(data, page_get_chardata(res.page, 0));
@@ -240,6 +249,7 @@ void test_page_leaf_split() {
     TEST_ASSERT_EQUAL_INT(3, res.new_page->hdr->cell_count);
     TEST_ASSERT_EQUAL_INT(1, res.new_page->hdr->is_leaf);
     TEST_ASSERT_EQUAL_INT(128 - 3 * 10, res.new_page->hdr->freespace_end);
+    TEST_ASSERT_EQUAL_INT(46, res.new_page->hdr->freespace);
     // check elements in right page
     TEST_ASSERT_EQUAL_INT(3, page_get_intkey(res.new_page, 0));
     TEST_ASSERT_EQUAL_STRING(data, page_get_chardata(res.new_page, 0));
