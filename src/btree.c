@@ -155,7 +155,7 @@ BTCellPtr* page_find_cellptr(BTPage* page, const void* key, u32 key_size) {
     return NULL;
 }
 
-u16 page_bisect_left(BTPage* page, const void* key, u32 key_size) {
+u16 page_insertion_point(BTPage* page, const void* key, u32 key_size) {
     if (page->hdr->cell_count == 0) {
         return 0;
     }
@@ -218,7 +218,7 @@ int page_leaf_insert(
         } else {
             // okay, there is enough space for both cellptr and payload
             // find insertion point for cellptr 
-            u16 ins_point = page_bisect_left(page, key, key_size);
+            u16 ins_point = page_insertion_point(page, key, key_size);
             cellptr = page_cellptr_at(page, ins_point);
 
             // if new cell should be inserted somewhere within 
