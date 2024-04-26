@@ -10,7 +10,7 @@
 #define u8 uint8_t
 
 #ifdef TEST
-#define PAGE_SIZE 128
+#define PAGE_SIZE 256
 #else
 #define PAGE_SIZE 512
 #endif
@@ -19,6 +19,7 @@
 #define PAGE_CELL_PTR_SIZE 12
 #define PAGE_FREE_BLOCK_SIZE 4
 #define PAGE_DATA_SIZE (PAGE_SIZE - PAGE_HDR_SIZE - PAGE_FREE_BLOCK_SIZE)
+#define MAX_PAYLOAD_SIZE (PAGE_DATA_SIZE / 4)
 
 typedef struct Value {
     const void* data;
@@ -124,6 +125,16 @@ BTFreeBlock* page_freeblock_at(BTPage* page, u16 pos) {
     return page->freeblocks + pos;
 }
 
+u32 page_compute_freespace(BTPage* page) {
+    u32 freespace = 0;
+    for (int i = 0; i < page->hdr->freeblock_count; i++) {
+        BTFreeBlock* fb = page_freeblock_at(page, i);
+        int space = fb->end_offset - fb->start_offset;
+        freespace += space;
+    }
+    return freespace;
+}
+
 typedef struct BTCanAllocResult {
     bool can_alloc;
     u16 size;
@@ -186,6 +197,9 @@ void page_freeblock_remove(BTPage* page, u16 pos) {
     memmove(dest, src, nblocks);
     page->hdr->freeblock_count--;
     page->hdr->freespace += PAGE_FREE_BLOCK_SIZE;
+
+    BTFreeBlock* first = page->freeblocks;
+    first->start_offset -= PAGE_FREE_BLOCK_SIZE;
 }
 
 
@@ -304,6 +318,132 @@ int page_space_dealloc(BTPage* page, u16 start, u16 end) {
     return NotEnoughSpace;
 }
 
+void page_mergesort_cells(BTCellPtr* cells[], int from, int to) {
+    if (to - from > 1) {
+        int mid = from + (to - from) / 2;
+        page_mergesort_cells(cells, from, mid);
+        page_mergesort_cells(cells, mid, to);
+
+        int left_size = mid - from;
+        BTCellPtr* left[left_size];
+        for (int i = 0; i < left_size; i++) {
+            left[i] = cells[from + i];
+        }
+
+        int right_size = to - mid;
+        BTCellPtr* right[right_size];
+        for (int i = 0; i < right_size; i++) {
+            right[i] = cells[mid + i];
+        }
+
+        int i = from;
+        int l = 0;
+        int r = 0;
+        while (l < left_size && r < right_size) {
+            if (left[l]->offset <= right[r]->offset) {
+                cells[i] = left[l];
+                l++;
+            } else {
+                cells[i] = right[r];
+                r++;
+            }
+            i++;
+        }
+
+        while (l < left_size) {
+            cells[i] = left[l];
+            l++;
+            i++;
+        }
+
+        while (r < right_size) {
+            cells[i] = right[r];
+            r++;
+            i++;
+        }
+    }
+}
+
+int page_cellptr_find_by_offset(BTCellPtr* cells[], int n, u16 offset) {
+    for (int i = 0; i < n; i++) {
+        if (cells[i]->offset >= offset) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+void page_defragment(BTPage* page, BTFreeBlock* extra_freeblock) {
+    printf("Defraging page!!!\n");
+
+    int cell_count = page->hdr->cell_count;
+    int freeblock_count = page->hdr->freeblock_count;
+    if (extra_freeblock != NULL) {
+        freeblock_count++;
+    }
+
+    // copy freeblocks into local arr
+    BTFreeBlock* freeblocks[freeblock_count];
+    int k = 0;
+    for (int i = 0; i < freeblock_count; i++) {
+        BTFreeBlock* curr = page->freeblocks + i;
+        if (extra_freeblock != NULL) {
+            if (curr->start_offset > extra_freeblock->start_offset) {
+                freeblocks[k++] = extra_freeblock;
+            }
+        }
+        freeblocks[k++] = curr;
+    }
+
+    // copy cells into local arr
+    // and sort them by offset
+    BTCellPtr* cell_ptrs[cell_count];
+    for (int i = 0; i < cell_count; i++) {
+        cell_ptrs[i] = page->cell_ptrs + i;
+    }
+    page_mergesort_cells(cell_ptrs, 0, cell_count);
+
+    for (int i = freeblock_count - 1; i >= 1; i--) {
+        BTFreeBlock* curr = freeblocks[i];
+        BTFreeBlock* prev = freeblocks[i - 1];
+        int slide = curr->end_offset - curr->start_offset;
+
+        void* src = page->pdata + prev->end_offset;
+        void* dest = src + slide;
+        u16 n = prev->end_offset - curr->start_offset;
+        memmove(dest, src, n);
+
+        // update cell pointers
+        int cell_idx = page_cellptr_find_by_offset(cell_ptrs, cell_count, prev->end_offset);
+        for (int i = cell_idx; i < cell_count; i++) {
+            BTCellPtr* cellptr = page_cellptr_at(page, i);
+            u16 cell_offset = cellptr->offset;
+
+            if (cell_offset >= prev->end_offset && cell_offset < curr->start_offset) {
+                cellptr->offset += slide;
+            } else {
+                break;
+            }
+        }
+
+        // extend prev pointer
+        prev->end_offset += slide;
+    }
+
+    // copy first and only valid freeblock into page
+    BTFreeBlock* first_fb = page->freeblocks;
+    memcpy(first_fb, freeblocks, sizeof(BTFreeBlock));
+
+    // update page metadata
+    page->hdr->freeblock_count = 1;
+    page->hdr->freespace = first_fb->end_offset - first_fb->start_offset;
+}
+
+u16 page_estimate_freespace_after_defrag(BTPage* page) {
+    int freeblocks = page->hdr->freeblock_count - 1;
+    return freeblocks * PAGE_FREE_BLOCK_SIZE + page->hdr->freespace;
+}
+
 Value page_key_at(BTPage* page, u16 pos) {
     BTCellPtr* cellptr = page_cellptr_at(page, pos);
     Value v = {
@@ -354,6 +494,16 @@ BTCellPtr* page_find_cellptr(BTPage* page, const void* key, u32 key_size) {
     return NULL;
 }
 
+Value page_data_by_key(BTPage* page, const void* key, u32 key_size) {
+    BTCellPtr* cellptr = page_find_cellptr(page, key, key_size);
+    Value v = { .size = 0, .data = 0 };
+    if (cellptr != NULL) {
+        v.size = cellptr->data_size;
+        v.data = page->pdata + cellptr->offset + cellptr->key_size;
+    }
+    return v;
+}
+
 u16 page_insertion_point(BTPage* page, const void* key, u32 key_size) {
     if (page->hdr->cell_count == 0) {
         return 0;
@@ -390,14 +540,37 @@ void page_move_cells(BTPage* page, u16 from) {
     memmove(dest, src, PAGE_CELL_PTR_SIZE * (page->hdr->cell_count - from));
 }
 
+int page_insert_freespace(
+    BTPage* page,
+    int size
+) {
+    BTFreeBlock* first = page->freeblocks;
+    first->end_offset -= size;
+    first->start_offset += PAGE_FREE_BLOCK_SIZE;
+    // page->hdr->freespace -= size;
+
+    if (page->hdr->freeblock_count > 1) {
+        page_freeblocks_move(page, 1);
+    }
+
+    BTFreeBlock* new_second = page->freeblocks + 1;
+    new_second->start_offset = first->end_offset;
+    new_second->end_offset = new_second->start_offset + size;
+    page->hdr->freespace -= PAGE_FREE_BLOCK_SIZE;
+    page->hdr->freeblock_count++;
+
+    return Ok;
+}
+
 int page_leaf_insert(
     BTPage* page,
     const void* key, u32 key_size,
     const void* data, u32 data_size
 ) {
 
-    u16 required_space = key_size + data_size + PAGE_CELL_PTR_SIZE;
-    if (required_space > (PAGE_SIZE - PAGE_HDR_SIZE) / 4) {
+    int payload_size = key_size + data_size;
+    printf("got %d, max payload size: %d\n", payload_size, MAX_PAYLOAD_SIZE);
+    if (payload_size > MAX_PAYLOAD_SIZE) {
         return PayloadTooBig;
     }
 
@@ -408,47 +581,52 @@ int page_leaf_insert(
     if (cellptr == NULL) {
         // key to insert doesn't exist in current page
 
+        u16 required_space = payload_size + PAGE_CELL_PTR_SIZE;
         if (page->hdr->freespace < required_space) {
-            printf("not enough free space, have: %d required: %d\n",
-                page->hdr->freespace, required_space
-            );
-            return NotEnoughSpace;
-        } else {
-            int rc = page_cell_alloc(page);
-            if (rc != Ok) {
-                printf("can't fit new cell into first free block\n");
-                return FreeBlockNotFound;
+            if (page_estimate_freespace_after_defrag(page) >= required_space) {
+                page_defragment(page, NULL);
+            } else {
+                printf("not enough free space, have: %d required: %d\n",
+                    page->hdr->freespace, required_space
+                );
+                return NotEnoughSpace;
             }
-
-            int size = key_size + data_size;
-            int offset = page_space_alloc(page, size);
-            if (offset == -1) {
-                printf("there are no freeblocks >= %d bytes\n", size);
-                page_cell_dealloc(page);
-                return FreeBlockNotFound;
-            }
-
-            // okay, there is enough space for both cellptr and payload
-            // find insertion point for cellptr 
-            u16 ins_point = page_insertion_point(page, key, key_size);
-            cellptr = page_cellptr_at(page, ins_point);
-
-            // we need move free blocks to make space for new cell
-            page_freeblocks_move_all(page);
-
-            // if new cell should be inserted somewhere within 
-            // existing cells then move other cells to the right to make space 
-            if (ins_point < page->hdr->cell_count) {
-                page_move_cells(page, ins_point);
-            }
-
-            // update page hdr
-            page->hdr->cell_count++;
-
-            // calculate byte offsets for key and data payload
-            data_offset = offset - data_size;
-            key_offset = data_offset - key_size;
         }
+
+        int rc = page_cell_alloc(page);
+        if (rc != Ok) {
+            printf("can't fit new cell into first free block\n");
+            return FreeBlockNotFound;
+        }
+
+        int size = key_size + data_size;
+        int offset = page_space_alloc(page, size);
+        if (offset == -1) {
+            printf("there are no freeblocks >= %d bytes\n", size);
+            page_cell_dealloc(page);
+            return FreeBlockNotFound;
+        }
+
+        // okay, there is enough space for both cellptr and payload
+        // find insertion point for cellptr 
+        u16 ins_point = page_insertion_point(page, key, key_size);
+        cellptr = page_cellptr_at(page, ins_point);
+
+        // we need move free blocks to make space for new cell
+        page_freeblocks_move_all(page);
+
+        // if new cell should be inserted somewhere within 
+        // existing cells then move other cells to the right to make space 
+        if (ins_point < page->hdr->cell_count) {
+            page_move_cells(page, ins_point);
+        }
+
+        // update page hdr
+        page->hdr->cell_count++;
+
+        // calculate byte offsets for key and data payload
+        data_offset = offset - data_size;
+        key_offset = data_offset - key_size;
     } else {
         // overwrite
         u16 curr_size = cellptr->key_size + cellptr->data_size;
@@ -462,41 +640,60 @@ int page_leaf_insert(
             data_offset = key_offset + key_size;
 
             if (diff > 0) {
+                // there will be some free space after writting new data 
+                // deallocate that space (add it to the list of free blocks)
                 u16 start = cellptr->offset;
                 u16 end = cellptr->offset + diff;
                 if (page_space_dealloc(page, start, end) != Ok) {
+                    // todo: 
+                    // see if we can defrag here to avoid splitting
                     return NotEnoughSpace;
                 }
             }
         } else {
-
-            // Algo:
-            //  Allocate bytes for new data
-            //  If allocation is not successful
-            //      Return 'not enough space'
-            //  Deallocate bytes of current data
-            //  If deallocation is not successful
-            //      Deallocate recently allocated bytes of new data
-            //      Return 'Not enough space'
-            // 
-            //  Set key offset, data offset
-
-            int new_offset = page_space_alloc(page, new_size);
-            if (new_offset == -1) {
-                return NotEnoughSpace;
-            }
-
             u16 curr_start = cellptr->offset;
             u16 curr_end = curr_start + curr_size;
+            int new_offset;
+
+            // try to dealloc old data
+            // dealloc can fail in some cases if there is not enough space for new free block
             if (page_space_dealloc(page, curr_start, curr_end) != Ok) {
 
-                // this dealloc will always succeed because
-                // it essentially undoes what previous alloc did
-                int rc = page_space_dealloc(page, new_offset, new_offset + new_size);
-                assert(rc == Ok);
-
-                return NotEnoughSpace;
+                // ok, dealloc failed
+                // lets see if we can make enough space by defragmenting the page
+                int space_after_defrag = page_estimate_freespace_after_defrag(page) + curr_size;
+                if (space_after_defrag >= new_size) {
+                    // things look good, lets defrag and write new data
+                    BTFreeBlock extra_fb = { .start_offset = curr_start, .end_offset = curr_end };
+                    page_defragment(page, &extra_fb);
+                    new_offset = page_space_alloc(page, new_size);
+                } else {
+                    // defrag wont help
+                    // insert fails
+                    return NotEnoughSpace;
+                }
+            } else {
+                new_offset = page_space_alloc(page, new_size);
+                if (new_offset == -1) {
+                    int space_after_defrag = page_estimate_freespace_after_defrag(page) + curr_size;
+                    if (space_after_defrag >= new_size) {
+                        // things look good, lets defrag and write new data
+                        BTFreeBlock extra_fb = { .start_offset = curr_start, .end_offset = curr_end };
+                        page_defragment(page, &extra_fb);
+                        new_offset = page_space_alloc(page, new_size);
+                    } else {
+                        // undo dealloc made in the begging
+                        // always succeeds
+                        int r = page_space_alloc(page, curr_size);
+                        assert(r != -1);
+                        return NotEnoughSpace;
+                    }
+                }
             }
+            assert(new_offset != -1);
+
+            // at this point we have deallocated the old data
+            // and we are sure that there is enough space for new data
 
             data_offset = new_offset - data_size;
             key_offset = data_offset - key_size;
