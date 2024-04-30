@@ -562,7 +562,7 @@ int page_insert_freespace(
     return Ok;
 }
 
-int page_leaf_insert(
+int page_leaf_set(
     BTPage* page,
     const void* key, u32 key_size,
     const void* data, u32 data_size

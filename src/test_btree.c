@@ -51,7 +51,7 @@ void test_page_new() {
     TEST_ASSERT_EQUAL_INT(page3->hdr->rightmost_pid, 0);
 }
 
-void test_insert_when_empty() {
+void test_set_when_empty() {
     // prepare
     BTree* btree = btree_new(&compare_integers);
     BTPage* page = buffer[btree->root_page_id];
@@ -62,14 +62,14 @@ void test_insert_when_empty() {
     char* data1 = "hello";
     size_t data1_size = strlen(data1) + 1;
 
-    int rc = page_leaf_insert(page, &key1, key1_size, data1, data1_size);
+    int rc = page_leaf_set(page, &key1, key1_size, data1, data1_size);
     TEST_ASSERT_EQUAL_INT(Ok, rc);
 
     u32 key2 = 321;
     size_t key2_size = sizeof(u32);
     char* data2 = "olla";
     size_t data2_size = strlen(data2) + 1;
-    int rc2 = page_leaf_insert(page, &key2, key2_size, data2, data2_size);
+    int rc2 = page_leaf_set(page, &key2, key2_size, data2, data2_size);
     TEST_ASSERT_EQUAL_INT(Ok, rc2);
     TEST_ASSERT_EQUAL_INT(2, page->hdr->cell_count);
 
@@ -127,7 +127,7 @@ BTree* test_data1() {
     BTPage* page = buffer[btree->root_page_id];
     int expected_freespace = page->hdr->freespace;
 
-    int irc1 = page_leaf_insert(page, &td1_key1, td1_key1_size, td1_data1, td1_data1_size);
+    int irc1 = page_leaf_set(page, &td1_key1, td1_key1_size, td1_data1, td1_data1_size);
     TEST_ASSERT_EQUAL_INT(Ok, irc1);
     expected_freespace -= (td1_entry1_size + PAGE_CELL_PTR_SIZE);
     TEST_ASSERT_EQUAL_INT(expected_freespace, page_compute_freespace(page));
@@ -137,7 +137,7 @@ BTree* test_data1() {
     expected_freespace -= PAGE_FREE_BLOCK_SIZE;
     TEST_ASSERT_EQUAL_INT(expected_freespace, page_compute_freespace(page));
 
-    int irc2 = page_leaf_insert(page, &td1_key2, td1_key2_size, td1_data2, td1_data2_size);
+    int irc2 = page_leaf_set(page, &td1_key2, td1_key2_size, td1_data2, td1_data2_size);
     TEST_ASSERT_EQUAL_INT(Ok, irc2);
     expected_freespace -= (td1_entry2_size + PAGE_CELL_PTR_SIZE);
     TEST_ASSERT_EQUAL_INT(expected_freespace, page_compute_freespace(page));
@@ -147,7 +147,7 @@ BTree* test_data1() {
     expected_freespace -= PAGE_FREE_BLOCK_SIZE;
     TEST_ASSERT_EQUAL_INT(expected_freespace, page_compute_freespace(page));
 
-    int irc3 = page_leaf_insert(page, &td1_key3, td1_key3_size, td1_data3, td1_data3_size);
+    int irc3 = page_leaf_set(page, &td1_key3, td1_key3_size, td1_data3, td1_data3_size);
     TEST_ASSERT_EQUAL_INT(Ok, irc3);
     expected_freespace -= (td1_entry3_size + PAGE_CELL_PTR_SIZE);
     TEST_ASSERT_EQUAL_INT(expected_freespace, page_compute_freespace(page));
@@ -197,7 +197,7 @@ BTree* test_data1() {
     return btree;
 }
 
-void test_insert_case1() {
+void test_set_case1() {
     // - non-empty, there is enough space in first freeblock for cell and data
     // -  first freeblock == payload
     //    test page 1 (cell: 12, data: 11) 
@@ -213,7 +213,7 @@ void test_insert_case1() {
     size_t data_size = 6;
     size_t entry_size = key_size + data_size;
 
-    int rc = page_leaf_insert(page, &key, key_size, data, data_size);
+    int rc = page_leaf_set(page, &key, key_size, data, data_size);
     TEST_ASSERT_EQUAL_INT(Ok, rc);
 
     // assert that old and new data are ok
@@ -238,7 +238,7 @@ void test_insert_case1() {
     btree_destroy(btree);
 }
 
-void test_insert_case2() {
+void test_set_case2() {
     // - non-empty, there is enough space in first freeblock for cell and data
     // -  first freeblock > payload
     //    test page 1 (cell: 12, data: 8) 
@@ -255,7 +255,7 @@ void test_insert_case2() {
     size_t data_size = 4;
     size_t entry_size = key_size + data_size;
 
-    int rc = page_leaf_insert(page, &key, key_size, data, data_size);
+    int rc = page_leaf_set(page, &key, key_size, data, data_size);
     TEST_ASSERT_EQUAL_INT(Ok, rc);
 
     // assert that old and new data are ok
@@ -284,7 +284,7 @@ void test_insert_case2() {
     btree_destroy(btree);
 }
 
-void test_insert_case3() {
+void test_set_case3() {
     // non-empty, there is enough space in first freeblock for cell and in mid freeblock for data
     // - mid freeblock == data
     //   test page 1 (cell: 4, data: 20)
@@ -302,7 +302,7 @@ void test_insert_case3() {
     size_t data_size = 16;
     size_t entry_size = key_size + data_size;
 
-    int rc = page_leaf_insert(page, &key, key_size, data, data_size);
+    int rc = page_leaf_set(page, &key, key_size, data, data_size);
     TEST_ASSERT_EQUAL_INT(Ok, rc);
 
     // assert that old and new data are ok
@@ -339,7 +339,7 @@ void test_insert_case3() {
     btree_destroy(btree);
 }
 
-void test_insert_case4() {
+void test_set_case4() {
     // non-empty, there is enough space in first freeblock for cell and in mid freeblock for data
     // - mid freeblock > data
     //   test page 1 (cell: 4, data: 15)
@@ -356,7 +356,7 @@ void test_insert_case4() {
     size_t data_size = 11;
     size_t entry_size = key_size + data_size;
 
-    int rc = page_leaf_insert(page, &key, key_size, data, data_size);
+    int rc = page_leaf_set(page, &key, key_size, data, data_size);
     TEST_ASSERT_EQUAL_INT(Ok, rc);
 
     // assert that old and new data are ok
@@ -468,11 +468,11 @@ void test_insert_case4() {
 int main(void) {
     UNITY_BEGIN();
     RUN_TEST(test_page_new);
-    RUN_TEST(test_insert_when_empty);
-    RUN_TEST(test_insert_case1);
-    RUN_TEST(test_insert_case2);
-    RUN_TEST(test_insert_case3);
-    RUN_TEST(test_insert_case4);
+    RUN_TEST(test_set_when_empty);
+    RUN_TEST(test_set_case1);
+    RUN_TEST(test_set_case2);
+    RUN_TEST(test_set_case3);
+    RUN_TEST(test_set_case4);
     return UNITY_END();
 }
 
