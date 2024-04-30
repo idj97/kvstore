@@ -8,3 +8,4 @@ setup:
 - gcc 11.4.0
 - make
 - unity test library
+- valgrind
