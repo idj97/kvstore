@@ -27,6 +27,7 @@ const size_t td1_entry3_size = td1_key3_size + td1_data3_size;
 ////////////////////////////////////////////////////////////////////////
 
 
+
 u32 get_key(BTPage* page, int pos) {
     Value v = page_key_at(page, pos);
     return *(u32*)v.data;
@@ -35,6 +36,22 @@ u32 get_key(BTPage* page, int pos) {
 const char* get_data(BTPage* page, int pos) {
     Value v = page_data_at(page, pos);
     return v.data;
+}
+
+void display_freeblocks(BTPage* page) {
+    for (int i = 0; i < page->hdr->cell_count; i++) {
+        BTCellPtr* ptr = page_cellptr_at(page, i);
+        int start = ptr->offset;
+        int end = start + ptr->key_size + ptr->data_size;
+        printf("cell %d. - start: %d, end: %d\n", i, start, end);
+    }
+    printf("---------------\n");
+
+    for (int i = 0; i < page->hdr->freeblock_count; i++) {
+        BTFreeBlock* fb = page_freeblock_at(page, i);
+        printf("fb %d. - start: %d, end: %d\n", i, fb->start_offset, fb->end_offset);
+    }
+    printf("===========\n");
 }
 
 void test_page_new() {
@@ -196,6 +213,153 @@ BTree* test_data1() {
 
     return btree;
 }
+
+//////////////////////////////////////////////////////////////////////
+// Test data 2
+const size_t td2_freespace3_size = 15;
+
+const u32 td2_key1 = 1;
+const size_t td2_key1_size = sizeof(u32);
+const char* td2_data1 = "1111111111111111111111111111111111111111111111111";
+const size_t td2_data1_size = 50;
+const size_t td2_entry1_size = td2_key1_size + td2_data1_size;
+
+const size_t td2_freespace2_size = 5;
+
+const u32 td2_key2 = 4;
+const size_t td2_key2_size = sizeof(u32);
+const char* td2_data2 = "2222222222222222222222222222222222222222222222222";
+const size_t td2_data2_size = 50;
+const size_t td2_entry2_size = td2_key2_size + td2_data2_size;
+
+const size_t td2_freespace1_size = 10;
+
+const u32 td2_key3 = 8;
+const size_t td2_key3_size = sizeof(u32);
+const char* td2_data3 = "333333333333333333333333333333333333333333333";
+const size_t td2_data3_size = 46;
+const size_t td2_entry3_size = td2_key3_size + td2_data3_size;
+
+void verify_test_data2(BTree* btree) {
+    BTPage* page = buffer[btree->root_page_id];
+    TEST_ASSERT_EQUAL_STRING(td2_data1, page_data_by_key(page, &td2_key1, td2_key1_size).data);
+    TEST_ASSERT_EQUAL_STRING(td2_data2, page_data_by_key(page, &td2_key2, td2_key2_size).data);
+    TEST_ASSERT_EQUAL_STRING(td2_data3, page_data_by_key(page, &td2_key3, td2_key3_size).data);
+}
+
+BTree* test_data2() {
+    // Test page 2:
+    //   total: 236 bytes
+    //   freespace: 30 bytes
+    //   used: 206 bytes
+    //    - extra freeblocks: 2 (8 bytes)
+    //    - cells: 3 (36 bytes)
+    //    - data: (162 bytes) 
+    //       1. 54 bytes (4 + 50)
+    //       2. 54 bytes (4 + 50)
+    //       3. 50 bytes (4 + 46)
+    // --------------------------------------------
+    // | d:50 | f:10 | d:54 | f:5 | d: 54 | f: 15 |
+    // --------------------------------------------
+    //
+    ///////////
+    // METADATA
+    ///////////
+    //     16      12      12      12       4          4        4
+    // ----------------------------------------------------------------
+    // | header | cell1 | cell2 | cell3 | fblock1 | fblock2 | fblock3 |
+    // ----------------------------------------------------------------
+    // 0       16      28      40       52       56         60        64
+    //
+    ///////
+    // DATA
+    ///////
+    //    50        10        54        5       54        15
+    // ----------------------------------------------------------
+    // | entry3 | fspace1 | entry2 | fspace2 | entry1 | fspace3 |
+    // ----------------------------------------------------------
+    // 64      114       124      178       183      237       252
+
+    BTree* btree = btree_new(&compare_integers);
+    BTPage* page = buffer[btree->root_page_id];
+    int expected_freespace = page->hdr->freespace;
+    display_freeblocks(page);
+
+    int frc1 = page_insert_freespace(page, td2_freespace3_size);
+    TEST_ASSERT_EQUAL_INT(Ok, frc1);
+    expected_freespace -= PAGE_FREE_BLOCK_SIZE;
+    TEST_ASSERT_EQUAL_INT(expected_freespace, page_compute_freespace(page));
+    display_freeblocks(page);
+
+    int irc1 = page_leaf_set(page, &td2_key1, td2_key1_size, td2_data1, td2_data1_size);
+    TEST_ASSERT_EQUAL_INT(Ok, irc1);
+    expected_freespace -= (td2_entry1_size + PAGE_CELL_PTR_SIZE);
+    TEST_ASSERT_EQUAL_INT(expected_freespace, page_compute_freespace(page));
+    display_freeblocks(page);
+
+    int frc2 = page_insert_freespace(page, td2_freespace2_size);
+    TEST_ASSERT_EQUAL_INT(Ok, frc2);
+    expected_freespace -= PAGE_FREE_BLOCK_SIZE;
+    TEST_ASSERT_EQUAL_INT(expected_freespace, page_compute_freespace(page));
+    display_freeblocks(page);
+
+    int irc2 = page_leaf_set(page, &td2_key2, td2_key2_size, td2_data2, td2_data2_size);
+    TEST_ASSERT_EQUAL_INT(Ok, irc2);
+    expected_freespace -= (td2_entry2_size + PAGE_CELL_PTR_SIZE);
+    TEST_ASSERT_EQUAL_INT(expected_freespace, page_compute_freespace(page));
+    display_freeblocks(page);
+
+    int frc3 = page_insert_freespace(page, td2_freespace1_size);
+    TEST_ASSERT_EQUAL_INT(Ok, frc3);
+    expected_freespace -= PAGE_FREE_BLOCK_SIZE;
+    TEST_ASSERT_EQUAL_INT(expected_freespace, page_compute_freespace(page));
+    display_freeblocks(page);
+
+    int irc3 = page_leaf_set(page, &td2_key3, td2_key3_size, td2_data3, td2_data3_size);
+    TEST_ASSERT_EQUAL_INT(Ok, irc3);
+    expected_freespace -= (td2_entry3_size + PAGE_CELL_PTR_SIZE);
+    expected_freespace += PAGE_FREE_BLOCK_SIZE; // first free block is removed since its consumed fully 
+    TEST_ASSERT_EQUAL_INT(expected_freespace, page_compute_freespace(page));
+    display_freeblocks(page);
+
+    verify_test_data2(btree);
+
+    // assert metadata, offsets etc
+    TEST_ASSERT_EQUAL_INT(3, page->hdr->cell_count);
+    TEST_ASSERT_EQUAL_INT(3, page->hdr->freeblock_count);
+    TEST_ASSERT_EQUAL_INT(expected_freespace, page->hdr->freespace);
+
+    BTFreeBlock* fb3 = page_freeblock_at(page, 2);
+    u32 expected_freespace3_offset = PAGE_SIZE - td2_freespace3_size;
+    TEST_ASSERT_EQUAL_INT(expected_freespace3_offset, fb3->start_offset);
+    TEST_ASSERT_EQUAL_INT(expected_freespace3_offset + td2_freespace3_size, fb3->end_offset);
+
+    BTCellPtr* cp1 = page_find_cellptr(page, &td2_key1, td2_key1_size);
+    u32 expected_entry1_offset = expected_freespace3_offset - td2_entry1_size;
+    TEST_ASSERT_EQUAL_INT(expected_entry1_offset, cp1->offset);
+    TEST_ASSERT_EQUAL_INT(td2_key1_size, cp1->key_size);
+    TEST_ASSERT_EQUAL_INT(td2_data1_size, cp1->data_size);
+
+    BTFreeBlock* fb2 = page_freeblock_at(page, 1);
+    u32 expected_freespace2_offset = expected_entry1_offset - td2_freespace2_size;
+    TEST_ASSERT_EQUAL_INT(expected_freespace2_offset, fb2->start_offset);
+    TEST_ASSERT_EQUAL_INT(expected_freespace2_offset + td2_freespace2_size, fb2->end_offset);
+
+    BTCellPtr* cp2 = page_find_cellptr(page, &td2_key2, td2_key2_size);
+    u32 expected_entry2_offset = expected_freespace2_offset - td2_entry2_size;
+    TEST_ASSERT_EQUAL_INT(expected_entry2_offset, cp2->offset);
+    TEST_ASSERT_EQUAL_INT(td2_key2_size, cp2->key_size);
+    TEST_ASSERT_EQUAL_INT(td2_data2_size, cp2->data_size);
+
+    BTFreeBlock* fb1 = page_freeblock_at(page, 0);
+    u32 expected_freespace1_offset = expected_entry2_offset - td2_freespace1_size;
+    TEST_ASSERT_EQUAL_INT(expected_freespace1_offset, fb1->start_offset);
+    // TEST_ASSERT_EQUAL_INT(expected_freespace1_offset + td2_freespace1_size, fb1->end_offset);
+
+    return btree;
+}
+
+//////////////////////////////////////////////////////////////////////////////////////////
 
 void test_set_case1() {
     // - non-empty, there is enough space in first freeblock for cell and data
@@ -401,6 +565,11 @@ void test_set_case4() {
     btree_destroy(btree);
 }
 
+void test_set_case5() {
+    BTree* btree = test_data2();
+
+    btree_destroy(btree);
+}
 
 // - empty and there is enough space
 
@@ -473,6 +642,7 @@ int main(void) {
     RUN_TEST(test_set_case2);
     RUN_TEST(test_set_case3);
     RUN_TEST(test_set_case4);
+    RUN_TEST(test_set_case5);
     return UNITY_END();
 }
 

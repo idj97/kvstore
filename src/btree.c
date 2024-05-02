@@ -222,7 +222,8 @@ int page_cell_alloc(BTPage* page) {
 }
 
 void page_cell_dealloc(BTPage* page) {
-    page->freeblocks->start_offset -= PAGE_FREE_BLOCK_SIZE;
+    page->freeblocks->start_offset -= PAGE_CELL_PTR_SIZE;
+    page->hdr->freespace += PAGE_CELL_PTR_SIZE;
 }
 
 // Return the end offset of the first free block 
@@ -232,7 +233,6 @@ void page_cell_dealloc(BTPage* page) {
 // parameter, then -1 is returned.
 int page_space_alloc(BTPage* page, u16 size) {
     assert(size > 0 && size < PAGE_DATA_SIZE);
-
     for (int i = 0; i < page->hdr->freeblock_count; i++) {
         BTFreeBlock* b = page_freeblock_at(page, i);
         u16 block_size = b->end_offset - b->start_offset;
@@ -241,7 +241,11 @@ int page_space_alloc(BTPage* page, u16 size) {
             b->end_offset -= size;
             page->hdr->freespace -= size;
             if (block_size == size) {
-                page_freeblock_remove(page, i);
+                if (i == 0 && page->hdr->freeblock_count > 1) {
+
+                } else {
+                    page_freeblock_remove(page, i);
+                }
             }
             return offset;
         } else {
